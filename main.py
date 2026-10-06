@@ -1,139 +1,203 @@
 import os
+import json
+import urllib.parse
+import urllib.request
+
 from flask import Flask, request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
 )
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = 952300757
+MANAGER_USERNAME = "Packand_Chill"
+
+TIKTOK_URL = "https://www.tiktok.com/@ehali.logistic?_r=1&_t=ZN-9AKrRs5w5ze"
+TG_URL = "https://t.me/ehali_logistik"
+MANAGER_URL = "https://t.me/Packand_Chill"
 
 app = Flask(__name__)
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# Temporary storage for the current application step.
+# Temporary state for users while they are filling out a request.
 user_states = {}
+
 
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚚 Заказать машину", callback_data="order")],
-        [InlineKeyboardButton("💰 Рассчитать стоимость", callback_data="price")],
-        [InlineKeyboardButton("📋 Наши услуги", callback_data="services")],
-        [InlineKeyboardButton("🏢 Для бизнеса", callback_data="business")],
-        [InlineKeyboardButton("📞 Связаться с нами", callback_data="contact")],
+        [InlineKeyboardButton("📞 Связаться с менеджером", callback_data="manager")],
+        [InlineKeyboardButton("📱 Наши соцсети", callback_data="socials")],
     ])
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states.pop(update.effective_user.id, None)
+
     await update.message.reply_text(
         "🚚 ЕХАЛИ — грузоперевозки\n\n"
-        "Перевозим грузы по Москве и области.\n"
+        "Грузоперевозки по Москве и области.\n"
         "Работаем с крупными компаниями, малым бизнесом и физическими лицами.\n\n"
         "Что вас интересует?",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
+
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
 
-    if query.data in ("order", "price"):
-        user_states[uid] = {"step": 1, "type": "Заказ машины" if query.data == "order" else "Расчёт стоимости"}
-        await query.message.reply_text("1/7 📍 Напишите адрес, откуда нужно забрать груз:")
-    elif query.data == "services":
+    if query.data == "order":
+        user_states[uid] = {"step": "details"}
+
         await query.message.reply_text(
-            "📋 Наши услуги:\n\n"
-            "• Грузоперевозки по Москве и области\n"
-            "• Подача машины к адресу\n"
-            "• Перевозка мебели, техники, товаров и других грузов\n"
-            "• Работа с физическими лицами и бизнесом\n\n"
-            "Для оформления заявки нажмите «Заказать машину».",
-            reply_markup=main_menu()
+            "🚚 Отлично! Чтобы оформить заявку, отправьте одним сообщением:\n\n"
+            "📍 Откуда → куда\n"
+            "📦 Что перевозим\n"
+            "📅 Когда нужна машина\n\n"
+            "Например:\n"
+            "Москва, ул. Ленина → Москва, ул. Пушкина\n"
+            "Мебель, около 500 кг\n"
+            "10 октября, после 15:00"
         )
-    elif query.data == "business":
+
+    elif query.data == "manager":
         await query.message.reply_text(
-            "🏢 Работаем с крупными компаниями, малым бизнесом и физическими лицами.\n\n"
-            "Если вам нужны регулярные перевозки или машина под задачи компании — оставьте заявку, и менеджер свяжется с вами.",
-            reply_markup=main_menu()
+            "📞 Связаться с менеджером:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "💬 Написать менеджеру",
+                    url=MANAGER_URL
+                )],
+                [InlineKeyboardButton("⬅️ В меню", callback_data="menu")],
+            ]),
         )
-    elif query.data == "contact":
+
+    elif query.data == "socials":
         await query.message.reply_text(
-            "📞 Оставьте заявку через кнопку «Заказать машину» — менеджер свяжется с вами.\n\n"
-            "Если хотите, позже сюда можно добавить телефон, сайт и соцсети.",
-            reply_markup=main_menu()
+            "📱 Мы в соцсетях:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("TikTok", url=TIKTOK_URL)],
+                [InlineKeyboardButton("Telegram", url=TG_URL)],
+                [InlineKeyboardButton("⬅️ В меню", callback_data="menu")],
+            ]),
         )
+
+    elif query.data == "menu":
+        await query.message.reply_text(
+            "Главное меню:",
+            reply_markup=main_menu(),
+        )
+
+
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    state = user_states.get(uid)
+
+    if not state or state.get("step") != "phone":
+        await update.message.reply_text(
+            "Выберите действие в меню:",
+            reply_markup=main_menu(),
+        )
+        return
+
+    phone = update.message.contact.phone_number
+    await finish_order(update, context, uid, phone)
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     state = user_states.get(uid)
 
     if not state:
-        await update.message.reply_text("Выберите действие в меню:", reply_markup=main_menu())
-        return
-
-    text = update.message.text.strip()
-    step = state["step"]
-
-    fields = {
-        1: ("from", "2/7 📍 Теперь напишите адрес доставки:"),
-        2: ("to", "3/7 📦 Что перевозим?"),
-        3: ("cargo", "4/7 ⚖️ Укажите примерный вес или объём:"),
-        4: ("weight", "5/7 📅 Когда нужна машина?"),
-        5: ("date", "6/7 👤 Как вас зовут?"),
-        6: ("name", "7/7 📞 Напишите номер телефона:"),
-    }
-
-    if step in fields:
-        key, next_text = fields[step]
-        state[key] = text
-        state["step"] += 1
-        await update.message.reply_text(next_text)
-        return
-
-    if step == 7:
-        state["phone"] = text
-
-        order_type = state["type"]
-        message = (
-            "🆕 НОВАЯ ЗАЯВКА «ЕХАЛИ»\n\n"
-            f"📌 Тип: {order_type}\n"
-            f"📍 Откуда: {state['from']}\n"
-            f"📍 Куда: {state['to']}\n"
-            f"📦 Груз: {state['cargo']}\n"
-            f"⚖️ Вес/объём: {state['weight']}\n"
-            f"📅 Дата: {state['date']}\n"
-            f"👤 Имя: {state['name']}\n"
-            f"📞 Телефон: {state['phone']}\n\n"
-            f"🆔 Telegram ID клиента: {uid}"
+        await update.message.reply_text(
+            "Выберите действие в меню:",
+            reply_markup=main_menu(),
         )
+        return
 
-        await context.bot.send_message(chat_id=ADMIN_ID, text=message)
-        user_states.pop(uid, None)
+    if state.get("step") == "details":
+        state["details"] = update.message.text.strip()
+        state["step"] = "phone"
+
+        keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("📱 Отправить номер телефона", request_contact=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
 
         await update.message.reply_text(
-            "✅ Заявка принята!\n\n"
-            "Менеджер свяжется с вами для уточнения деталей и стоимости.",
-            reply_markup=main_menu()
+            "Спасибо! Теперь оставьте номер телефона — Telegram подставит его автоматически.",
+            reply_markup=keyboard,
         )
+        return
+
+    if state.get("step") == "phone":
+        # Allow manual phone entry as a fallback.
+        await finish_order(update, context, uid, update.message.text.strip())
+
+
+async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: int, phone: str):
+    state = user_states.get(uid, {})
+    details = state.get("details", "Не указаны")
+
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else "не указан"
+
+    admin_message = (
+        "🆕 НОВАЯ ЗАЯВКА «ЕХАЛИ»\n\n"
+        f"📋 Заявка клиента:\n{details}\n\n"
+        f"📞 Телефон: {phone}\n"
+        f"👤 Telegram: {username}\n"
+        f"🆔 Telegram ID: {uid}"
+    )
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=admin_message,
+    )
+
+    user_states.pop(uid, None)
+
+    await update.message.reply_text(
+        "✅ Заявка отправлена!\n\n"
+        "Менеджер свяжется с вами для уточнения деталей.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    await update.message.reply_text(
+        "Что хотите сделать дальше?",
+        reply_markup=main_menu(),
+    )
+
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CallbackQueryHandler(buttons))
+telegram_app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
 
 @app.get("/")
 def health():
     return "ЕХАЛИ bot is running"
 
+
 @app.route("/set-webhook", methods=["GET", "POST"])
 def set_webhook():
-    # Configure Telegram webhook via the Bot API directly.
-    # This avoids crossing asyncio event loops inside Flask.
-    import json
-    import urllib.parse
-    import urllib.request
-
     url = request.args.get("url")
     if not url:
         return "Pass ?url=https://YOUR-SERVICE.onrender.com/telegram", 400
@@ -150,15 +214,19 @@ def set_webhook():
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode("utf-8"))
+
         if result.get("ok"):
             return f"Webhook set to {url}"
+
         return f"Telegram API error: {result}", 502
     except Exception as exc:
         return f"Webhook setup error: {exc}", 502
 
+
 @app.post("/telegram")
 def telegram_webhook():
     import asyncio
+
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, telegram_app.bot)
 
@@ -171,6 +239,7 @@ def telegram_webhook():
 
     asyncio.run(process())
     return "ok"
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
