@@ -126,25 +126,52 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 def health():
     return "ЕХАЛИ bot is running"
 
-@app.post("/telegram")
-async def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    await telegram_app.process_update(update)
-    return "ok"
-
 @app.route("/set-webhook", methods=["GET", "POST"])
 def set_webhook():
-    # Use this endpoint once after deployment:
-    # /set-webhook?url=https://YOUR-SERVICE.onrender.com/telegram
+    # Configure Telegram webhook via the Bot API directly.
+    # This avoids crossing asyncio event loops inside Flask.
+    import json
+    import urllib.parse
+    import urllib.request
+
     url = request.args.get("url")
     if not url:
         return "Pass ?url=https://YOUR-SERVICE.onrender.com/telegram", 400
+
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+    payload = urllib.parse.urlencode({"url": url}).encode("utf-8")
+    req = urllib.request.Request(
+        api_url,
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if result.get("ok"):
+            return f"Webhook set to {url}"
+        return f"Telegram API error: {result}", 502
+    except Exception as exc:
+        return f"Webhook setup error: {exc}", 502
+
+@app.post("/telegram")
+def telegram_webhook():
     import asyncio
-    asyncio.run(telegram_app.bot.set_webhook(url=url))
-    return f"Webhook set to {url}"
+    update_data = request.get_json(force=True)
+    update = Update.de_json(update_data, telegram_app.bot)
+
+    async def process():
+        await telegram_app.initialize()
+        try:
+            await telegram_app.process_update(update)
+        finally:
+            await telegram_app.shutdown()
+
+    asyncio.run(process())
+    return "ok"
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(telegram_app.initialize())
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
