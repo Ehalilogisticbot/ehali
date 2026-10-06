@@ -132,7 +132,7 @@ async def telegram_webhook():
     await telegram_app.process_update(update)
     return "ok"
 
-@app.post("/set-webhook")
+@app.route("/set-webhook", methods=["GET", "POST"])
 def set_webhook():
     # Use this endpoint once after deployment:
     # /set-webhook?url=https://YOUR-SERVICE.onrender.com/telegram
